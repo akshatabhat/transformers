@@ -334,7 +334,6 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_cls_index = torch.tensor([f.cls_index for f in features], dtype=torch.long)
     all_p_mask = torch.tensor([f.p_mask for f in features], dtype=torch.float)
-    all_cached_outputs = torch.zeros(len(all_input_ids), dtype=torch.float)     # dummy tensor to store cached outputs
     if evaluate:
         all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
@@ -344,7 +343,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
         all_end_positions = torch.tensor([f.end_position for f in features], dtype=torch.long)
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
                                 all_start_positions, all_end_positions,
-                                all_cls_index, all_p_mask, all_cached_outputs)
+                                all_cls_index, all_p_mask)
 
     if output_examples:
         return dataset, examples, features
