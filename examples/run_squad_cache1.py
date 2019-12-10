@@ -144,7 +144,7 @@ def train(args, train_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
-
+    count = 0
     # First epoch
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     for step, batch in enumerate(epoch_iterator):
@@ -170,8 +170,8 @@ def train(args, train_dataset, model, tokenizer):
         cached_all_end_positions.append(batch[4])
         cached_all_cls_index.append(batch[5])
         cached_all_p_mask.append(batch[6])
-        cached_all_outputs.append(outputs)
-
+        cached_all_outputs.append(outputs[0])
+        print(outputs[0])
         loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
         if args.n_gpu > 1:
@@ -216,19 +216,23 @@ def train(args, train_dataset, model, tokenizer):
                 model_to_save.save_pretrained(output_dir)
                 torch.save(args, os.path.join(output_dir, 'training_args.bin'))
                 logger.info("Saving model checkpoint to %s", output_dir)
-
+        
         if args.max_steps > 0 and global_step > args.max_steps:
             epoch_iterator.close()
             break
+        count += 1
+        if count == 2:
+            break
+    '''
     if args.max_steps > 0 and global_step > args.max_steps:
         train_iterator.close()
         break
-    
+    '''
     # For epochs > 1 : use the create train_dataset
-    train_dataset = TensorDataset(cached_all_input_ids, cached_all_input_mask,
-                                    cached_all_segment_ids, cached_all_start_positions,
-                                    cached_all_end_positions, cached_all_cls_index,
-                                    cached_all_p_mask, cached_all_outputs
+    train_dataset = TensorDataset(torch.stack(cached_all_input_ids), torch.stack(cached_all_input_mask),
+                                    torch.stack(cached_all_segment_ids), torch.stack(cached_all_start_positions),
+                                    torch.stack(cached_all_end_positions), torch.stack(cached_all_cls_index),
+                                    torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs, dim=0)
                                     )
     # Initialise train_data loader
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -251,19 +255,7 @@ def train(args, train_dataset, model, tokenizer):
                 inputs.update({'cls_index': batch[5],
                                'p_mask':       batch[6]})
             outputs = batch[7] 
-            loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
-
-            if epoch == 0:
-                if args.n_gpu > 1:
-                    loss = loss.mean() # mean() to average on multi-gpu parallel (not distributed) training
-                if args.gradient_accumulation_steps > 1:
-                    loss = loss / args.gradient_accumulation_steps
-
-                if args.fp16:
-                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    loss.backward()
+            loss = outputs  # model outputs are always tuple in transformers (see doc)
 
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -302,7 +294,6 @@ def train(args, train_dataset, model, tokenizer):
                 break
             epoch_time = timeit.default_timer() - start_time
             logger.info("Train Epoch %s time: %f secs", str(i), epoch_time)
-
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
