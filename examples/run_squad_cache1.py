@@ -90,7 +90,14 @@ def train(args, train_dataset, model, tokenizer):
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     # Lists to store data after first epoch
-
+    cached_all_input_ids = []
+    cached_all_input_mask = []
+    cached_all_segment_ids = []
+    cached_all_start_positions = []
+    cached_all_end_positions = []
+    cached_all_cls_index = []
+    cached_all_p_mask = []
+    cached_all_outputs = []
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -136,16 +143,97 @@ def train(args, train_dataset, model, tokenizer):
     global_step = 1
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
-    train_iterator = trange(int(args.num_train_epochs-1), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
 
     # First epoch
+    epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+    for step, batch in enumerate(epoch_iterator):
+        model.train()
+        batch = tuple(t.to(args.device) for t in batch)
+        inputs = {'input_ids':       batch[0],
+                    'attention_mask':  batch[1],
+                    'start_positions': batch[3],
+                    'end_positions':   batch[4]}
+        if args.model_type != 'distilbert':
+            inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
+        if args.model_type in ['xlnet', 'xlm']:
+            inputs.update({'cls_index': batch[5],
+                            'p_mask':       batch[6]})
+        outputs = model(**inputs)
+
+        # cache data
+        #cache_data = cache_data.append((batch[0], batch[1], batch[2], batch[3], batch[4], batch[5], batch[6], batch[6], outputs))
+        cached_all_input_ids.append(batch[0])
+        cached_all_input_mask.append(batch[1])
+        cached_all_segment_ids.append(batch[2])
+        cached_all_start_positions.append(batch[3])
+        cached_all_end_positions.append(batch[4])
+        cached_all_cls_index.append(batch[5])
+        cached_all_p_mask.append(batch[6])
+        cached_all_outputs.append(outputs)
+
+        loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+
+        if args.n_gpu > 1:
+            loss = loss.mean() # mean() to average on multi-gpu parallel (not distributed) training
+        if args.gradient_accumulation_steps > 1:
+            loss = loss / args.gradient_accumulation_steps
+
+        if args.fp16:
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
+
+        tr_loss += loss.item()
+        if (step + 1) % args.gradient_accumulation_steps == 0:
+            if args.fp16:
+                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+            optimizer.step()
+            scheduler.step()  # Update learning rate schedule
+            model.zero_grad()
+            global_step += 1
+
+            if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                # Log metrics
+                if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
+                    results = evaluate(args, model, tokenizer)
+                    for key, value in results.items():
+                        tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
+                tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
+                tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
+                logging_loss = tr_loss
+
+            if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                # Save model checkpoint
+                output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+                model_to_save.save_pretrained(output_dir)
+                torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                logger.info("Saving model checkpoint to %s", output_dir)
+
+        if args.max_steps > 0 and global_step > args.max_steps:
+            epoch_iterator.close()
+            break
+    if args.max_steps > 0 and global_step > args.max_steps:
+        train_iterator.close()
+        break
+    
     # For epochs > 1 : use the create train_dataset
-    train_dataset = TensorDataset()
+    train_dataset = TensorDataset(cached_all_input_ids, cached_all_input_mask,
+                                    cached_all_segment_ids, cached_all_start_positions,
+                                    cached_all_end_positions, cached_all_cls_index,
+                                    cached_all_p_mask, cached_all_outputs
+                                    )
     # Initialise train_data loader
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)    
-
+    train_iterator = trange(int(args.num_train_epochs-1), desc="Epoch", disable=args.local_rank not in [-1, 0])
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
@@ -160,12 +248,7 @@ def train(args, train_dataset, model, tokenizer):
             if args.model_type in ['xlnet', 'xlm']:
                 inputs.update({'cls_index': batch[5],
                                'p_mask':       batch[6]})
-            if epoch == 0:
-                outputs = model(**inputs)
-                # Cache output if first epoch
-
-            else:
-                outputs = batch[7] 
+            outputs = batch[7] 
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             if epoch == 0:
@@ -218,6 +301,7 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
+
     if args.local_rank in [-1, 0]:
         tb_writer.close()
 
@@ -360,7 +444,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
                                 all_start_positions, all_end_positions,
                                 all_cls_index, all_p_mask)
-
+    
     if output_examples:
         return dataset, examples, features
     return dataset
