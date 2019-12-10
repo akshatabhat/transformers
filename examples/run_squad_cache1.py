@@ -146,7 +146,8 @@ def train(args, train_dataset, model, tokenizer):
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)    
 
-    for _ in train_iterator:
+    for i in train_iterator:
+        start_time = timeit.default_timer()
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
             model.train()
@@ -215,6 +216,9 @@ def train(args, train_dataset, model, tokenizer):
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
                 break
+            epoch_time = timeit.default_timer() - start_time
+            logger.info("Train Epoch %s time: %f secs", str(i), epoch_time)
+
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
