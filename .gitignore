@@ -8,6 +8,8 @@ __pycache__/
 # C extensions
 *.so
 
+slurm_out/
+
 # Distribution / packaging
 .Python
 build/
