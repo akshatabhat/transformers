@@ -20,6 +20,7 @@ from __future__ import absolute_import, division, print_function
 import argparse
 import logging
 import os
+import sys
 import random
 import glob
 import timeit
@@ -58,6 +59,11 @@ from utils_squad import (read_squad_examples, convert_examples_to_features,
 from utils_squad_evaluate import EVAL_OPTS, main as evaluate_on_squad
 
 logger = logging.getLogger(__name__)
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) \
                   for conf in (BertConfig, XLNetConfig, XLMConfig)), ())
