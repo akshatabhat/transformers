@@ -1,0 +1,12 @@
+version: "2.3"
+services:
+  transformers:
+    ipc: host
+    build: .
+    volumes:
+      - .:/develop
+
+
+        
+
+

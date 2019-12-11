@@ -150,7 +150,7 @@ def train(args, train_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
-    count = 0
+
     # First epoch
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     for step, batch in enumerate(epoch_iterator):
@@ -177,7 +177,6 @@ def train(args, train_dataset, model, tokenizer):
         cached_all_cls_index.append(batch[5])
         cached_all_p_mask.append(batch[6])
         cached_all_outputs.append(outputs[0])
-        print(outputs[0])
         loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
         if args.n_gpu > 1:
@@ -226,19 +225,17 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             epoch_iterator.close()
             break
-        count += 1
-        if count == 2:
-            break
     '''
     if args.max_steps > 0 and global_step > args.max_steps:
         train_iterator.close()
         break
     '''
     # For epochs > 1 : use the create train_dataset
+
     train_dataset = TensorDataset(torch.stack(cached_all_input_ids), torch.stack(cached_all_input_mask),
                                     torch.stack(cached_all_segment_ids), torch.stack(cached_all_start_positions),
                                     torch.stack(cached_all_end_positions), torch.stack(cached_all_cls_index),
-                                    torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs, dim=0)
+                                    torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs)
                                     )
     # Initialise train_data loader
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -261,8 +258,8 @@ def train(args, train_dataset, model, tokenizer):
                 inputs.update({'cls_index': batch[5],
                                'p_mask':       batch[6]})
             outputs = batch[7] 
-            loss = outputs  # model outputs are always tuple in transformers (see doc)
-
+            loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+            print(loss)
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
