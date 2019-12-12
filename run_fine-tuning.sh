@@ -25,8 +25,9 @@ time python3 examples/run_squad_cache1.py \
   --num_train_epochs 2.0 \
   --max_seq_length 384 \
   --doc_stride 128 \
+  --overwrite_output_dir \
   --save_steps 0 \
-  --output_dir /tmp/debug_squad/
+  --output_dir /tmp/debug_squad/ > results/squad_cache1.out
 
 echo "Job completed at:"
 date
