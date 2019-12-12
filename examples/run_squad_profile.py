@@ -140,71 +140,80 @@ def train(args, train_dataset, model, tokenizer):
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
 
-            model.train()
+            with torch.autograd.profiler.profile(use_cuda=True) as prof:
 
-            batch = tuple(t.to(args.device) for t in batch)
-            inputs = {'input_ids':       batch[0],
-                      'attention_mask':  batch[1],
-                      'start_positions': batch[3],
-                      'end_positions':   batch[4]}
-            if args.model_type != 'distilbert':
-                inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
-            if args.model_type in ['xlnet', 'xlm']:
-                inputs.update({'cls_index': batch[5],
-                               'p_mask':       batch[6]})
+                model.train()
 
-            # forward
-            outputs = model(**inputs)
+                batch = tuple(t.to(args.device) for t in batch)
+                inputs = {'input_ids':       batch[0],
+                          'attention_mask':  batch[1],
+                          'start_positions': batch[3],
+                          'end_positions':   batch[4]}
+                if args.model_type != 'distilbert':
+                    inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
+                if args.model_type in ['xlnet', 'xlm']:
+                    inputs.update({'cls_index': batch[5],
+                                   'p_mask':       batch[6]})
 
-
-            loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
-
-            if args.n_gpu > 1:
-                loss = loss.mean() # mean() to average on multi-gpu parallel (not distributed) training
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
-
-            # backward
-            if args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
+                # forward
+                with torch.autograd.profiler.record_function("forward"):
+                    outputs = model(**inputs)
 
 
-            tr_loss += loss.item()
-            if (step + 1) % args.gradient_accumulation_steps == 0:
-                if args.fp16:
-                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
-                else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
-                # update parameters
-                optimizer.step()
-                scheduler.step()  # Update learning rate schedule
-                model.zero_grad()
-                global_step += 1
+                if args.n_gpu > 1:
+                    loss = loss.mean() # mean() to average on multi-gpu parallel (not distributed) training
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss / args.gradient_accumulation_steps
+
+                # backward
+                with torch.autograd.profiler.record_function("backward"):
+                    if args.fp16:
+                        with amp.scale_loss(loss, optimizer) as scaled_loss:
+                            scaled_loss.backward()
+                    else:
+                        loss.backward()
 
 
-            if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
-                # Log metrics
-                if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
-                    results = evaluate(args, model, tokenizer)
-                    for key, value in results.items():
-                        tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
-                tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
-                tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
-                logging_loss = tr_loss
+                tr_loss += loss.item()
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    if args.fp16:
+                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-            if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
-                # Save model checkpoint
-                output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-                model_to_save.save_pretrained(output_dir)
-                torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-                logger.info("Saving model checkpoint to %s", output_dir)
+                    # update parameters
+                    with torch.autograd.profiler.record_function("update_param"):
+                        optimizer.step()
+                        scheduler.step()  # Update learning rate schedule
+                        model.zero_grad()
+                        global_step += 1
+
+
+                if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                    # Log metrics
+                    if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
+                        results = evaluate(args, model, tokenizer)
+                        for key, value in results.items():
+                            tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
+                    tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
+                    tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
+                    logging_loss = tr_loss
+
+                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                    # Save model checkpoint
+                    output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                    model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+                    model_to_save.save_pretrained(output_dir)
+                    torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                    logger.info("Saving model checkpoint to %s", output_dir)
+
+                print(prof.key_averages().table(row_limit=1000))
+                break
+
 
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
@@ -556,6 +565,7 @@ def main():
         tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
         model.to(args.device)
 
+    '''
     # Evaluation - we can ask to evaluate all the checkpoints (sub-directories) in a directory
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
@@ -581,6 +591,7 @@ def main():
     logger.info("Results: {}".format(results))
 
     return results
+    '''
 
 
 if __name__ == "__main__":
