@@ -211,7 +211,7 @@ def train(args, train_dataset, model, tokenizer):
                 torch.save(args, os.path.join(output_dir, 'training_args.bin'))
                 logger.info("Saving model checkpoint to %s", output_dir)
 
-            print(prof.key_averages().table(row_limit=1000))
+            logger.info(prof.key_averages().table(row_limit=1000))
             break
 
 
