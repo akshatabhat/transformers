@@ -40,7 +40,7 @@ from tqdm import tqdm, trange
 
 from transformers import (WEIGHTS_NAME, BertConfig,
                             BertModel,
-                            BertForQuestionAnswering, BertTokenizer,
+                            CachedBertForQuestionAnswering, BertTokenizer,
                             XLMConfig, XLMForQuestionAnswering,
                             XLMTokenizer, XLNetConfig,
                             XLNetForQuestionAnswering,
@@ -70,7 +70,7 @@ ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) \
                   for conf in (BertConfig, XLNetConfig, XLMConfig)), ())
 
 MODEL_CLASSES = {
-    'bert': (BertConfig, BertForQuestionAnswering, BertTokenizer),
+    'bert': (BertConfig, CachedBertForQuestionAnswering, BertTokenizer),
     'xlnet': (XLNetConfig, XLNetForQuestionAnswering, XLNetTokenizer),
     'xlm': (XLMConfig, XLMForQuestionAnswering, XLMTokenizer),
     'distilbert': (DistilBertConfig, DistilBertForQuestionAnswering, DistilBertTokenizer),
@@ -87,7 +87,7 @@ def set_seed(args):
 def to_list(tensor):
     return tensor.detach().cpu().tolist()
 
-def train(args, train_dataset, model, tokenizer):
+def train(args, train_dataset, model, tokenizer, bert_model):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
@@ -150,12 +150,14 @@ def train(args, train_dataset, model, tokenizer):
     global_step = 1
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
+    bert_model.zero_grad()
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
 
     # First epoch
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     for step, batch in enumerate(epoch_iterator):
         model.train()
+        bert_model.train()
         batch = tuple(t.to(args.device) for t in batch)
         inputs = {'input_ids':       batch[0],
                     'attention_mask':  batch[1]}
@@ -167,18 +169,10 @@ def train(args, train_dataset, model, tokenizer):
             inputs.update({'cls_index': batch[5],
                             'p_mask':       batch[6]})
         # outputs = model(**inputs)
-        bert_config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
-                                          cache_dir=args.cache_dir if args.cache_dir else None)
-        # bert_tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-        #                                         do_lower_case=args.do_lower_case,
-        #                                         cache_dir=args.cache_dir if args.cache_dir else None)
-        bert_model = BertModel.from_pretrained(args.model_name_or_path,
-                                            from_tf=bool('.ckpt' in args.model_name_or_path),
-                                            config=bert_config,
-                                            cache_dir=args.cache_dir if args.cache_dir else None)
+
         outputs = bert_model(**inputs)
 
-        # cache data
+        #cache data
         #cache_data = cache_data.append((batch[0], batch[1], batch[2], batch[3], batch[4], batch[5], batch[6], batch[6], outputs))
         cached_all_input_ids.append(batch[0])
         cached_all_input_mask.append(batch[1])
@@ -248,7 +242,7 @@ def train(args, train_dataset, model, tokenizer):
     train_dataset = TensorDataset(torch.stack(cached_all_input_ids), torch.stack(cached_all_input_mask),
                                     torch.stack(cached_all_segment_ids), torch.stack(cached_all_start_positions),
                                     torch.stack(cached_all_end_positions), torch.stack(cached_all_cls_index),
-                                    torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs)
+                                    torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs[0])
                                     )
     # Initialise train_data loader
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -261,12 +255,13 @@ def train(args, train_dataset, model, tokenizer):
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            inputs = {'input_ids':       batch[0],
-                      'attention_mask':  batch[1],
-                      'start_positions': batch[3],
-                      'end_positions':   batch[4],
-                      'bert_last_hidden': batch[7],
-                      'bert_pooler_out': batch[8]}
+            # inputs = {'input_ids':       batch[0],
+            #           'attention_mask':  batch[1],
+            #           'start_positions': batch[3],
+            #           'end_positions':   batch[4],
+            #           'bert_last_hidden': batch[7],
+            #           'bert_pooler_out': batch[8]}
+            inputs = {'bert_last_hidden': batch[7]}            
             if args.model_type != 'distilbert':
                 inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
             if args.model_type in ['xlnet', 'xlm']:
@@ -614,6 +609,14 @@ def main():
                                         config=config,
                                         cache_dir=args.cache_dir if args.cache_dir else None)
 
+    bert_config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+                                          cache_dir=args.cache_dir if args.cache_dir else None)
+
+    bert_model = BertModel.from_pretrained(args.model_name_or_path,
+                                        from_tf=bool('.ckpt' in args.model_name_or_path),
+                                        config=bert_config,
+                                        cache_dir=args.cache_dir if args.cache_dir else None)
+
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
@@ -634,7 +637,7 @@ def main():
     # Training
     if args.do_train:
         train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
+        global_step, tr_loss = train(args, train_dataset, model, tokenizer, bert_model)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
