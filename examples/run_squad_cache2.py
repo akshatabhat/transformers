@@ -149,6 +149,7 @@ def train(args, train_dataset, model, tokenizer, bert_model):
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
 
     # First epoch
+    start_time = timeit.default_timer()
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     for step, batch in enumerate(epoch_iterator):
         model.train()
@@ -164,29 +165,32 @@ def train(args, train_dataset, model, tokenizer, bert_model):
             bert_inputs.update({'cls_index': batch[5],
                             'p_mask':       batch[6]})
 
-        bert_outputs = bert_model(**bert_inputs)
+        # bert_outputs = bert_model(**bert_inputs)
+        bert_out = torch.Tensor(batch[0].size(0), 50, 768).to(args.device)#, torch.Tensor(batch[0].size(0), 768).to(args.device))
 
         #cache data
         cached_all_input_ids.append(batch[0])
         cached_all_start_positions.append(batch[3])
         cached_all_end_positions.append(batch[4])
-        for bert_out in bert_outputs:
-            cached_all_outputs.append(bert_out)
+        # for bert_out in bert_outputs:
+        cached_all_outputs.append(bert_out)
 
         # Feed the output of bert to QA
-        qa_inputs = {'start_positions': batch[3],
-                    'end_positions':   batch[4],
-                    'bert_last_hidden': bert_outputs[0]}
-        if args.model_type != 'distilbert':
-            qa_inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
-        if args.model_type in ['xlnet', 'xlm']:
-            qa_inputs.update({'cls_index': batch[5],
-                            'p_mask':       batch[6]})        
-        outputs = model(**qa_inputs)
+        # qa_inputs = {'start_positions': batch[3],
+        #             'end_positions':   batch[4],
+        #             'bert_last_hidden': bert_out}
+        # if args.model_type != 'distilbert':
+        #     qa_inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
+        # if args.model_type in ['xlnet', 'xlm']:
+        #     qa_inputs.update({'cls_index': batch[5],
+        #                     'p_mask':       batch[6]})        
+        # outputs = model(**qa_inputs)
 
         if args.max_steps > 0 and global_step > args.max_steps:
             epoch_iterator.close()
             break
+    epoch_time = timeit.default_timer() - start_time
+    logger.info("Train Epoch %s time: %f secs", "0", epoch_time)
 
     # For epochs > 1 : use the create train_dataset
 
@@ -196,12 +200,12 @@ def train(args, train_dataset, model, tokenizer, bert_model):
     #                                 torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs[0])
     #                                 )
     
-    train_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs[0]))    
+    train_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))    
 
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)    
 
-    train_iterator = trange(int(args.num_train_epochs-1), desc="Epoch", disable=args.local_rank not in [-1, 0])
+    train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     for i in train_iterator:
         start_time = timeit.default_timer()
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
@@ -212,7 +216,7 @@ def train(args, train_dataset, model, tokenizer, bert_model):
                     'end_positions':   batch[2],
                     'bert_last_hidden': batch[3]}
             
-            outputs = model(**inputs)
+            outputs = model(**qa_inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
             #print(loss)
             tr_loss += loss.item()
@@ -250,8 +254,8 @@ def train(args, train_dataset, model, tokenizer, bert_model):
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
                 break
-            epoch_time = timeit.default_timer() - start_time
-            logger.info("Train Epoch %s time: %f secs", str(i), epoch_time)
+        epoch_time = timeit.default_timer() - start_time
+        logger.info("Train Epoch %s time: %f secs", str(i), epoch_time)
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
