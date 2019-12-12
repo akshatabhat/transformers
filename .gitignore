@@ -9,6 +9,7 @@ __pycache__/
 *.so
 
 slurm_out/
+results/
 
 # Distribution / packaging
 .Python

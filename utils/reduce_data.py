@@ -6,7 +6,7 @@ def main(file_path, out_len):
         print(len(data['data']))
 
         data['data'] = data['data'][:out_len]
-    with open(file_path + 'new.json', 'w') as f:
+    with open(file_path, 'w') as f:
         print(len(data['data']))
         json.dump(data, f)
 
