@@ -109,16 +109,17 @@ def compute_cache(args, train_dataset, bert_model):
     start_time = timeit.default_timer()
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     global_step = 1
+    bert_model.eval()
     for step, batch in enumerate(epoch_iterator):
-        bert_model.eval()
+        
         batch = tuple(t.to(args.device) for t in batch)
         bert_inputs = {'input_ids':       batch[0],
                     'attention_mask':  batch[1],
                     'token_type_ids': None}
-
-        #bert_out = bert_model(**bert_inputs)
-        bert_out = torch.Tensor(batch[0].size(0), 50, 768).to(args.device)#, torch.Tensor(batch[0].size(0), 768).to(args.device))
-
+        bert_out = bert_model(**bert_inputs)
+        bert_out = bert_out[0].detach().cpu().numpy()
+        #print(bert_out.shape)
+        #bert_out = torch.Tensor(batch[0].size(0), 384, 768).to(args.device)#, torch.Tensor(batch[0].size(0), 768).to(args.device))
         #cache data
         cached_all_input_ids.append(batch[0])
         cached_all_start_positions.append(batch[3])
@@ -129,10 +130,10 @@ def compute_cache(args, train_dataset, bert_model):
         if args.max_steps > 0 and global_step > args.max_steps:
             epoch_iterator.close()
             break
-    cache_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))
+    #cache_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))
     epoch_time = timeit.default_timer() - start_time
     logger.info("Train Epoch %s time: %f secs", "0", epoch_time)
-    return cache_dataset
+    return None #cache_dataset
 
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
@@ -202,7 +203,7 @@ def train(args, train_dataset, model, tokenizer):
             batch = tuple(t.to(args.device) for t in batch)
             qa_inputs = {'start_positions': batch[1],
                     'end_positions':   batch[2],
-                    'bert_last_hidden': batch[3]}
+                    'bert_last_hidden': torch.Tensor(batch[0].size(0), 384, 768).to(args.device)}
             print(qa_inputs['bert_last_hidden'].shape)
             outputs = model(**qa_inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
@@ -433,6 +434,8 @@ def main():
     parser.add_argument("--max_query_length", default=64, type=int,
                         help="The maximum number of tokens for the question. Questions longer than this will "
                              "be truncated to this length.")
+    parser.add_argument("--do_cache", action='store_true',
+                        help="Whether to cache.")
     parser.add_argument("--do_train", action='store_true',
                         help="Whether to run training.")
     parser.add_argument("--do_eval", action='store_true',
@@ -573,13 +576,16 @@ def main():
         except ImportError:
             raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
 
-    # Training
-    if args.do_train:
+    if args.do_cache:
         train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
         bert_model.to(args.device)
         cache_dataset = compute_cache(args, train_dataset, bert_model)
+        exit
+
+    # Training
+    if args.do_train:
         model.to(args.device)
-        global_step, tr_loss = train(args, cache_dataset, model, tokenizer)
+        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
