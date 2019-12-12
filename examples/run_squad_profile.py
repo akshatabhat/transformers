@@ -175,20 +175,20 @@ def train(args, train_dataset, model, tokenizer):
                     else:
                         loss.backward()
 
-            # note keeping
-            tr_loss += loss.item()
-            if (step + 1) % args.gradient_accumulation_steps == 0:
-                if args.fp16:
-                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
-                else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                # note keeping
+                tr_loss += loss.item()
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    if args.fp16:
+                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-                # update parameters
-                with torch.autograd.profiler.record_function("update_param"):
-                    optimizer.step()
-                    scheduler.step()  # Update learning rate schedule
-                    model.zero_grad()
-                    global_step += 1
+                    # update parameters
+                    with torch.autograd.profiler.record_function("update_param"):
+                        optimizer.step()
+                        scheduler.step()  # Update learning rate schedule
+                        model.zero_grad()
+                        global_step += 1
 
 
             if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
