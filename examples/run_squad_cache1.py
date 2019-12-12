@@ -60,7 +60,7 @@ from utils_squad_evaluate import EVAL_OPTS, main as evaluate_on_squad
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.DEBUG)
+handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
@@ -93,7 +93,7 @@ def train(args, train_dataset, model, tokenizer):
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+    train_dataloader = DataLoader(train_dataset, sampler=None, batch_size=args.train_batch_size)
 
     # Lists to store data after first epoch
     cached_all_input_ids = []
@@ -231,7 +231,10 @@ def train(args, train_dataset, model, tokenizer):
         break
     '''
     # For epochs > 1 : use the create train_dataset
-
+    print("****************************",torch.stack(cached_all_input_ids).shape, torch.stack(cached_all_input_mask).shape,
+                                    torch.stack(cached_all_segment_ids).shape, torch.stack(cached_all_start_positions).shape,
+                                    torch.stack(cached_all_end_positions).shape, torch.stack(cached_all_cls_index).shape,
+                                    torch.stack(cached_all_p_mask).shape, torch.stack(cached_all_outputs).shape)
     train_dataset = TensorDataset(torch.stack(cached_all_input_ids), torch.stack(cached_all_input_mask),
                                     torch.stack(cached_all_segment_ids), torch.stack(cached_all_start_positions),
                                     torch.stack(cached_all_end_positions), torch.stack(cached_all_cls_index),
