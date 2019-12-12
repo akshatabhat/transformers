@@ -146,14 +146,13 @@ def train(args, train_dataset, model, tokenizer, bert_model):
     global_step = 1
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
-    bert_model.zero_grad()
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
 
     # First epoch
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     for step, batch in enumerate(epoch_iterator):
         model.train()
-        bert_model.train()
+        bert_model.eval()
         batch = tuple(t.to(args.device) for t in batch)
         bert_inputs = {'input_ids':       batch[0],
                     'attention_mask':  batch[1]}
@@ -168,7 +167,6 @@ def train(args, train_dataset, model, tokenizer, bert_model):
         bert_outputs = bert_model(**bert_inputs)
 
         #cache data
-        print("*********batch[0] : ",batch[0], "batch[0].shape :", batch[0].shape)
         cached_all_input_ids.append(batch[0])
         cached_all_start_positions.append(batch[3])
         cached_all_end_positions.append(batch[4])
@@ -189,11 +187,7 @@ def train(args, train_dataset, model, tokenizer, bert_model):
         if args.max_steps > 0 and global_step > args.max_steps:
             epoch_iterator.close()
             break
-    '''
-    if args.max_steps > 0 and global_step > args.max_steps:
-        train_iterator.close()
-        break
-    '''
+
     # For epochs > 1 : use the create train_dataset
 
     # train_dataset = TensorDataset(torch.stack(cached_all_input_ids), torch.stack(cached_all_input_mask),
