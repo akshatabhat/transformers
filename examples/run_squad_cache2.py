@@ -88,7 +88,7 @@ def to_list(tensor):
     return tensor.detach().cpu().tolist()
 
 def compute_cache(args, train_dataset, bert_model):
-    """ Cachine Layers """
+    """ Caching Final layer outputs """
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
@@ -99,19 +99,12 @@ def compute_cache(args, train_dataset, bert_model):
     cached_all_end_positions = []
     cached_all_outputs = []
 
-    if args.max_steps > 0:
-        t_total = args.max_steps
-        args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
-    else:
-        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
-
     # 0th epoch
     start_time = timeit.default_timer()
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     global_step = 1
     bert_model.eval()
     for step, batch in enumerate(epoch_iterator):
-        
         batch = tuple(t.to(args.device) for t in batch)
         bert_inputs = {'input_ids':       batch[0],
                     'attention_mask':  batch[1],
@@ -127,12 +120,10 @@ def compute_cache(args, train_dataset, bert_model):
         # for bert_out in bert_outputs:
         cached_all_outputs.append(bert_out)
 
-        if args.max_steps > 0 and global_step > args.max_steps:
-            epoch_iterator.close()
-            break
+    # cache_tensor = torch.tensor(cached_all_outputs).to(args.device)
     #cache_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))
-    epoch_time = timeit.default_timer() - start_time
-    logger.info("Train Epoch %s time: %f secs", "0", epoch_time)
+    cache_time = timeit.default_timer() - start_time
+    logger.info("Cache time: %f secs", cache_time)
     return None #cache_dataset
 
 def train(args, train_dataset, model, tokenizer):
