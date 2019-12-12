@@ -87,7 +87,97 @@ def set_seed(args):
 def to_list(tensor):
     return tensor.detach().cpu().tolist()
 
-def train(args, train_dataset, model, tokenizer, bert_model):
+def compute_cache(args, train_dataset, bert_model):
+    """ Cachine Layers """
+    args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
+    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+
+    # Lists to store data after first epoch
+    cached_all_input_ids = []
+    cached_all_start_positions = []
+    cached_all_end_positions = []
+    cached_all_outputs = []
+
+    if args.max_steps > 0:
+        t_total = args.max_steps
+        args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
+    else:
+        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+
+    """
+    # Prepare optimizer and schedule (linear warmup and decay)
+    no_decay = ['bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
+    if args.fp16:
+        try:
+            from apex import amp
+        except ImportError:
+            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16_opt_level)
+
+    # multi-gpu training (should be after apex fp16 initialization)
+    if args.n_gpu > 1:
+        model = torch.nn.DataParallel(model)
+
+    # Distributed training (should be after apex fp16 initialization)
+    if args.local_rank != -1:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank],
+                                                          output_device=args.local_rank,
+                                                          find_unused_parameters=True)
+
+    # Train!
+    logger.info("***** Running training *****")
+    logger.info("  Num examples = %d", len(train_dataset))
+    logger.info("  Num Epochs = %d", args.num_train_epochs)
+    logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
+    logger.info("  Total train batch size (w. parallel, distributed & accumulation) = %d",
+                   args.train_batch_size * args.gradient_accumulation_steps * (torch.distributed.get_world_size() if args.local_rank != -1 else 1))
+    logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
+    logger.info("  Total optimization steps = %d", t_total)
+    
+    global_step = 1
+    tr_loss, logging_loss = 0.0, 0.0
+    model.zero_grad()
+    set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
+    """
+
+
+    # 0th epoch
+    start_time = timeit.default_timer()
+    epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+    global_step = 1
+    for step, batch in enumerate(epoch_iterator):
+        bert_model.eval()
+        batch = tuple(t.to(args.device) for t in batch)
+        bert_inputs = {'input_ids':       batch[0],
+                    'attention_mask':  batch[1],
+                    'token_type_ids': None}
+
+        #bert_out = bert_model(**bert_inputs)
+        bert_out = torch.Tensor(batch[0].size(0), 50, 768).to(args.device)#, torch.Tensor(batch[0].size(0), 768).to(args.device))
+
+        #cache data
+        cached_all_input_ids.append(batch[0])
+        cached_all_start_positions.append(batch[3])
+        cached_all_end_positions.append(batch[4])
+        # for bert_out in bert_outputs:
+        cached_all_outputs.append(bert_out)
+
+        if args.max_steps > 0 and global_step > args.max_steps:
+            epoch_iterator.close()
+            break
+    cache_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))
+    epoch_time = timeit.default_timer() - start_time
+    logger.info("Train Epoch %s time: %f secs", "0", epoch_time)
+    return cache_dataset
+
+def train(args, train_dataset, model, tokenizer):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
@@ -132,7 +222,6 @@ def train(args, train_dataset, model, tokenizer, bert_model):
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank],
                                                           output_device=args.local_rank,
                                                           find_unused_parameters=True)
-
     # Train!
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_dataset))
@@ -147,64 +236,6 @@ def train(args, train_dataset, model, tokenizer, bert_model):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
-
-    # First epoch
-    start_time = timeit.default_timer()
-    epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
-    for step, batch in enumerate(epoch_iterator):
-        model.train()
-        bert_model.eval()
-        batch = tuple(t.to(args.device) for t in batch)
-        bert_inputs = {'input_ids':       batch[0],
-                    'attention_mask':  batch[1]}
-                    # 'start_positions': batch[3],
-                    # 'end_positions':   batch[4]}
-        if args.model_type != 'distilbert':
-            bert_inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
-        if args.model_type in ['xlnet', 'xlm']:
-            bert_inputs.update({'cls_index': batch[5],
-                            'p_mask':       batch[6]})
-
-        # bert_outputs = bert_model(**bert_inputs)
-        bert_out = torch.Tensor(batch[0].size(0), 50, 768).to(args.device)#, torch.Tensor(batch[0].size(0), 768).to(args.device))
-
-        #cache data
-        cached_all_input_ids.append(batch[0])
-        cached_all_start_positions.append(batch[3])
-        cached_all_end_positions.append(batch[4])
-        # for bert_out in bert_outputs:
-        cached_all_outputs.append(bert_out)
-
-        # Feed the output of bert to QA
-        # qa_inputs = {'start_positions': batch[3],
-        #             'end_positions':   batch[4],
-        #             'bert_last_hidden': bert_out}
-        # if args.model_type != 'distilbert':
-        #     qa_inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
-        # if args.model_type in ['xlnet', 'xlm']:
-        #     qa_inputs.update({'cls_index': batch[5],
-        #                     'p_mask':       batch[6]})        
-        # outputs = model(**qa_inputs)
-
-        if args.max_steps > 0 and global_step > args.max_steps:
-            epoch_iterator.close()
-            break
-    epoch_time = timeit.default_timer() - start_time
-    logger.info("Train Epoch %s time: %f secs", "0", epoch_time)
-
-    # For epochs > 1 : use the create train_dataset
-
-    # train_dataset = TensorDataset(torch.stack(cached_all_input_ids), torch.stack(cached_all_input_mask),
-    #                                 torch.stack(cached_all_segment_ids), torch.stack(cached_all_start_positions),
-    #                                 torch.stack(cached_all_end_positions), torch.stack(cached_all_cls_index),
-    #                                 torch.stack(cached_all_p_mask), torch.stack(cached_all_outputs[0])
-    #                                 )
-    
-    train_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))    
-
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)    
-
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     for i in train_iterator:
         start_time = timeit.default_timer()
@@ -568,8 +599,11 @@ def main():
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    model.to(args.device)
-    bert_model.to(args.device)
+    
+
+
+    
+    
     logger.info("Training/evaluation parameters %s", args)
 
     # Before we do anything with models, we want to ensure that we get fp16 execution of torch.einsum if args.fp16 is set.
@@ -585,7 +619,10 @@ def main():
     # Training
     if args.do_train:
         train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer, bert_model)
+        bert_model.to(args.device)
+        cache_dataset = compute_cache(args, train_dataset, bert_model)
+        model.to(args.device)
+        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
