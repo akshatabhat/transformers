@@ -1337,8 +1337,7 @@ class CachedBertForQuestionAnswering(BertPreTrainedModel):
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None, inputs_embeds=None,
                 start_positions=None, end_positions=None, bert_last_hidden=None):
-        
-        assert bert_last_hidden is None, "invalid input"
+        assert bert_last_hidden is not None, "invalid input"
         sequence_output = bert_last_hidden
 
         logits = self.qa_outputs(sequence_output)
@@ -1346,7 +1345,7 @@ class CachedBertForQuestionAnswering(BertPreTrainedModel):
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
 
-        outputs = (start_logits, end_logits,) + outputs[2:]
+        outputs = (start_logits, end_logits,) #+ outputs[2:]
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
