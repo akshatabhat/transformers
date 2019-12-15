@@ -1250,12 +1250,13 @@ class BertForQuestionAnswering(BertPreTrainedModel):
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None, inputs_embeds=None,
                 start_positions=None, end_positions=None):
 
-        outputs = self.bert(input_ids,
-                            attention_mask=attention_mask,
-                            token_type_ids=token_type_ids,
-                            position_ids=position_ids,
-                            head_mask=head_mask,
-                            inputs_embeds=inputs_embeds)
+        with torch.no_grad():
+            outputs = self.bert(input_ids,
+                                attention_mask=attention_mask,
+                                token_type_ids=token_type_ids,
+                                position_ids=position_ids,
+                                head_mask=head_mask,
+                                inputs_embeds=inputs_embeds)
 
         sequence_output = outputs[0]
 
@@ -1329,8 +1330,6 @@ class CachedBertForQuestionAnswering(BertPreTrainedModel):
     def __init__(self, config):
         super(CachedBertForQuestionAnswering, self).__init__(config)
         self.num_labels = config.num_labels
-
-        self.bert = BertModel(config)
         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
 
         self.init_weights()
@@ -1339,7 +1338,7 @@ class CachedBertForQuestionAnswering(BertPreTrainedModel):
                 start_positions=None, end_positions=None, bert_last_hidden=None):
         assert bert_last_hidden is not None, "invalid input"
         sequence_output = bert_last_hidden
-
+        #print("sequence_output : ", sequence_output)
         logits = self.qa_outputs(sequence_output)
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)

@@ -87,7 +87,7 @@ def set_seed(args):
 def to_list(tensor):
     return tensor.detach().cpu().tolist()
 
-def compute_cache(args, train_dataset, bert_model):
+def compute_cache(args, train_dataset, model):
     """ Caching Final layer outputs """
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -103,24 +103,28 @@ def compute_cache(args, train_dataset, bert_model):
     start_time = timeit.default_timer()
     epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
     global_step = 1
-    bert_model.eval()
+    model.eval()
     for step, batch in enumerate(epoch_iterator):
         batch = tuple(t.to(args.device) for t in batch)
-        bert_inputs = {'input_ids':       batch[0],
-                    'attention_mask':  batch[1],
-                    'token_type_ids': None}
-        bert_out = bert_model(**bert_inputs)
-        bert_out = bert_out[0].detach().cpu().numpy()
-        #print(bert_out.shape)
-        #bert_out = torch.Tensor(batch[0].size(0), 384, 768).to(args.device)#, torch.Tensor(batch[0].size(0), 768).to(args.device))
+        inputs = {'input_ids':       batch[0],
+                    'attention_mask':  batch[1]}
+        if args.model_type != 'distilbert':
+            inputs['token_type_ids'] = None if args.model_type == 'xlm' else batch[2]
+        if args.model_type in ['xlnet', 'xlm']:
+            inputs.update({'cls_index': batch[5],
+                            'p_mask':       batch[6]})
+        output = model(**inputs)
+        output = output[0].detach().cpu()#.numpy()
         #cache data
         cached_all_input_ids.append(batch[0])
         cached_all_start_positions.append(batch[3])
         cached_all_end_positions.append(batch[4])
         # for bert_out in bert_outputs:
-        cached_all_outputs.append(bert_out)
-
-    # cache_tensor = torch.tensor(cached_all_outputs).to(args.device)
+        cached_all_outputs.append(output)
+    cached_all_outputs = torch.cat(cached_all_outputs)
+    cached_all_outputs_tensor = cached_all_outputs.to(args.device)
+    #logger.info("element_size:", cached_all_outputs_tensor[0].element_size(), "nelement", cached_all_outputs_tensor[0].nelement(), "len:", len(cached_all_outputs.shape))
+    #logger.info("Total size:", cached_all_outputs_tensor[0].element_size() * cached_all_outputs_tensor[0].nelement() * len(cached_all_outputs))
     #cache_dataset = TensorDataset(torch.cat(cached_all_input_ids), torch.cat(cached_all_start_positions), torch.cat(cached_all_end_positions), torch.cat(cached_all_outputs))
     cache_time = timeit.default_timer() - start_time
     logger.info("Cache time: %f secs", cache_time)
@@ -542,10 +546,7 @@ def main():
     bert_config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                           cache_dir=args.cache_dir if args.cache_dir else None)
 
-    bert_model = BertModel.from_pretrained(args.model_name_or_path,
-                                        from_tf=bool('.ckpt' in args.model_name_or_path),
-                                        config=bert_config,
-                                        cache_dir=args.cache_dir if args.cache_dir else None)
+
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
@@ -568,14 +569,19 @@ def main():
             raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
 
     if args.do_cache:
+        model = BertModel.from_pretrained(args.model_name_or_path,
+                                        from_tf=bool('.ckpt' in args.model_name_or_path),
+                                        config=bert_config,
+                                        cache_dir=args.cache_dir if args.cache_dir else None)
         train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
-        bert_model.to(args.device)
-        cache_dataset = compute_cache(args, train_dataset, bert_model)
+        model.to(args.device)
+        cache_dataset = compute_cache(args, train_dataset, model)
         exit
 
     # Training
     if args.do_train:
         model.to(args.device)
+        train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False)
         global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
