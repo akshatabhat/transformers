@@ -23,7 +23,7 @@ import os
 import random
 import glob
 import timeit
-
+from time import sleep
 import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
@@ -108,13 +108,20 @@ def cache_outputs(args, train_dataset, model, tokenizer):
                             'p_mask':       batch[6]})
 
         # forward
-        print('Step:', step, 'Input ids shape:', batch[0].shape)
+        #print('Step:', step, 'Input ids shape:', batch[0].shape)
         outputs = model(**inputs)
-        outputs_ = outputs[0].detach().cpu().numpy()
-        print(outputs[0].shape)
+        outputs_ = outputs[0].detach().cpu()#.numpy()
+        #print(outputs[0].shape)
         cache.append(outputs_)
     
-    cache_tensor = torch.tensor(cache).to(args.device)
+    # cache_tensor = torch.tensor(cache).to(args.device)
+    # logger.info("element_size:", str(cache_tensor[0].element_size()), "nelement", str(cache_tensor[0].nelement()), "len:", str(len(cache)))
+    # logger.info("Total size:", str(cache_tensor[0].element_size() * cache_tensor[0].nelement() * len(cache)))
+    torch.Tensor(4294967296).to(args.device)
+
+    logger.info("Caching done :) ")
+    sleep(100)
+    
 
 
 def train(args, train_dataset, model, tokenizer):
