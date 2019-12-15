@@ -178,7 +178,7 @@ def train(args, train_dataset, model, tokenizer):
         cached_all_p_mask.append(batch[6])
         cached_all_outputs.append(outputs[0])
         loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
-
+        print(loss.shape)
         if args.n_gpu > 1:
             loss = loss.mean() # mean() to average on multi-gpu parallel (not distributed) training
         if args.gradient_accumulation_steps > 1:
